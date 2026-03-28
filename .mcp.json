@@ -5,7 +5,10 @@
       "args": ["tsx", "mcp/index.ts"],
       "cwd": "c:/Users/Codex/repo/turbo-hub",
       "env": {
-        "HUB_URL": "http://127.0.0.1:2400"
+        "HUB_URL": "http://127.0.0.1:2400",
+        "HUB_AGENT_NAME": "Claude Code",
+        "HUB_AGENT_CLI": "claude -p",
+        "HUB_WORKSPACE": "c:/Users/Codex/repo/turbo-hub"
       }
     }
   }
