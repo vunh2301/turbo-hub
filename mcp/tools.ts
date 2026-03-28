@@ -1,5 +1,6 @@
 import { HubClient } from './client.js'
 import { HubWsClient } from './ws-client.js'
+import { subscribeChannel, unsubscribeChannel } from './subscriber.js'
 
 export function getToolDefinitions() {
   return [
@@ -154,6 +155,8 @@ export async function executeTool(
     case 'hub_join': {
       // Subscribe WS first so we don't miss any messages during the HTTP join
       ws.subscribe(args.channel_id)
+      // Also tell subscriber daemon to watch this channel for auto-respond
+      subscribeChannel(args.channel_id)
       const result = await client.joinChannel(args.channel_id)
       const msgSummary =
         result.recentMessages.length > 0
@@ -200,6 +203,7 @@ export async function executeTool(
 
     case 'hub_leave': {
       ws.unsubscribe(args.channel_id)
+      unsubscribeChannel(args.channel_id)
       await client.leaveChannel(args.channel_id)
       return `Left channel ${args.channel_id}`
     }

@@ -12,6 +12,7 @@ interface SubscriberConfig {
   workspace: string        // cwd for CLI spawn
   cliTimeout: number       // ms, default 120000
   mentionKeywords: string[] // derived from agentName
+  respondAll: boolean      // HUB_RESPOND_ALL=true → respond to all messages, not just mentions
 }
 
 function loadConfig(): SubscriberConfig {
@@ -24,6 +25,7 @@ function loadConfig(): SubscriberConfig {
     workspace: process.env.HUB_WORKSPACE || process.cwd(),
     cliTimeout: Number(process.env.HUB_CLI_TIMEOUT) || 120_000,
     mentionKeywords: deriveKeywords(agentName),
+    respondAll: process.env.HUB_RESPOND_ALL === 'true',
   }
 }
 
@@ -69,8 +71,9 @@ function spawnCli(cliCommand: string, prompt: string, timeout: number, workspace
     const child = spawn(cmd, args, {
       cwd: workspace,
       timeout,
-      env: { ...process.env },
+      env: { ...process.env, HUB_SUBSCRIBER_DISABLED: 'true' },
       shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'], // ignore stdin — MCP uses it for protocol
     })
 
     let stdout = ''
@@ -114,10 +117,13 @@ async function handleMessage(
   if (message.agentId === client.agentId) return
   if (!config.agentCli) return
 
-  // Only respond when mentioned
-  if (!isMentioned(message.content, config.mentionKeywords)) return
+  // Respond when mentioned, or always if respondAll mode
+  const mentioned = isMentioned(message.content, config.mentionKeywords)
+  if (!config.respondAll && !mentioned) return
 
-  const prompt = stripMentions(message.content)
+  const prompt = mentioned
+    ? stripMentions(message.content)
+    : message.content
   if (!prompt) return
 
   // Build context from recent buffer
@@ -141,6 +147,27 @@ async function handleMessage(
 
 // ─── WS connection ───────────────────────────────────────────────────────────
 
+let _ws: WebSocket | null = null
+let _subscribedChannels: Set<string> | null = null
+
+// Called by MCP tools (hub_join) to make subscriber watch a channel immediately
+export function subscribeChannel(channelId: string): void {
+  if (!_subscribedChannels) return
+  _subscribedChannels.add(channelId)
+  if (_ws?.readyState === WebSocket.OPEN) {
+    _ws.send(JSON.stringify({ type: 'subscribe_channel', channelId }))
+    console.error(`[subscriber] subscribed to channel ${channelId}`)
+  }
+}
+
+export function unsubscribeChannel(channelId: string): void {
+  if (!_subscribedChannels) return
+  _subscribedChannels.delete(channelId)
+  if (_ws?.readyState === WebSocket.OPEN) {
+    _ws.send(JSON.stringify({ type: 'unsubscribe_channel', channelId }))
+  }
+}
+
 function startWS(
   wsUrl: string,
   token: string,
@@ -148,10 +175,12 @@ function startWS(
   config: SubscriberConfig,
   client: HubClient,
 ): void {
+  _subscribedChannels = subscribedChannels
   let retryMs = 1_000
 
   function connect() {
     const ws = new WebSocket(wsUrl)
+    _ws = ws
 
     ws.on('open', () => {
       retryMs = 1_000
@@ -174,6 +203,7 @@ function startWS(
     })
 
     ws.on('close', () => {
+      _ws = null
       console.error(`[subscriber] WS disconnected, retry in ${retryMs}ms`)
       setTimeout(connect, retryMs)
       retryMs = Math.min(retryMs * 2, 30_000)
@@ -199,6 +229,9 @@ function startWS(
 // ─── Entry ───────────────────────────────────────────────────────────────────
 
 export async function startSubscriber(): Promise<void> {
+  // Prevent recursive spawn: child `claude -p` processes must not start their own subscriber
+  if (process.env.HUB_SUBSCRIBER_DISABLED === 'true') return
+
   const config = loadConfig()
 
   // Skip if no CLI configured

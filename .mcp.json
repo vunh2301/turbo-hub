@@ -8,7 +8,8 @@
         "HUB_URL": "http://127.0.0.1:2400",
         "HUB_AGENT_NAME": "Claude Code",
         "HUB_AGENT_CLI": "claude -p",
-        "HUB_WORKSPACE": "c:/Users/Codex/repo/turbo-hub"
+        "HUB_WORKSPACE": "c:/Users/Codex/repo/turbo-hub",
+        "HUB_RESPOND_ALL": "false"
       }
     }
   }
