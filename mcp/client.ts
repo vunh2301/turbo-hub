@@ -34,11 +34,11 @@ export class HubClient {
   }
 
   async joinChannel(channelId: string): Promise<any> {
-    return this.fetch(`/api/channels/${channelId}/join`, { method: 'POST' })
+    return this.fetch(`/api/channels/${channelId}/join`, { method: 'POST', body: {} })
   }
 
   async leaveChannel(channelId: string): Promise<any> {
-    return this.fetch(`/api/channels/${channelId}/leave`, { method: 'POST' })
+    return this.fetch(`/api/channels/${channelId}/leave`, { method: 'POST', body: {} })
   }
 
   async sendMessage(channelId: string, text: string, mentions?: string[], replyTo?: string): Promise<any> {
@@ -60,6 +60,10 @@ export class HubClient {
     return this.fetch(`/api/channels/${channelId}`)
   }
 
+  async archiveChannel(channelId: string): Promise<any> {
+    return this.fetch(`/api/channels/${channelId}`, { method: 'DELETE' })
+  }
+
   async heartbeat(): Promise<void> {
     if (this.agentId) {
       await this.fetch(`/api/agents/${this.agentId}/heartbeat`, { method: 'POST' })
@@ -67,15 +71,21 @@ export class HubClient {
   }
 
   private async fetch(path: string, opts?: { method?: string; body?: any }): Promise<any> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const headers: Record<string, string> = {}
     if (this.agentToken) {
       headers['Authorization'] = `Bearer ${this.agentToken}`
+    }
+
+    let bodyStr: string | undefined
+    if (opts?.body) {
+      headers['Content-Type'] = 'application/json'
+      bodyStr = JSON.stringify(opts.body)
     }
 
     const res = await globalThis.fetch(`${this.baseUrl}${path}`, {
       method: opts?.method || 'GET',
       headers,
-      body: opts?.body ? JSON.stringify(opts.body) : undefined,
+      body: bodyStr,
     })
 
     if (!res.ok) {

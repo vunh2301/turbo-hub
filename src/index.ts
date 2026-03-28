@@ -39,6 +39,19 @@ async function main() {
     },
   })
 
+  // Allow empty JSON body on POST requests (some MCP clients send Content-Type without body)
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    if (!body || (body as string).trim() === '') {
+      done(null, {})
+      return
+    }
+    try {
+      done(null, JSON.parse(body as string))
+    } catch (e: any) {
+      done(e)
+    }
+  })
+
   await app.register(fastifyCors, { origin: true })
   await app.register(fastifyWebsocket)
 

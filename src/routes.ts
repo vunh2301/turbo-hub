@@ -90,6 +90,21 @@ export function registerRoutes(
     })),
   }))
 
+  app.delete('/api/agents/:agentId', async (req, reply) => {
+    const { agentId } = req.params as { agentId: string }
+    const agent = agents.get(agentId)
+    if (!agent) {
+      return reply.code(404).send({ error: 'not_found' })
+    }
+    // Remove from all channels
+    for (const ch of channels.list()) {
+      channels.leave(ch.id, agentId)
+    }
+    agents.remove(agentId)
+    hubWs.broadcastAll({ type: 'agent_offline', agentId })
+    return { ok: true }
+  })
+
   // ─── Channels ──────────────────────────────────────
 
   app.post('/api/channels', async (req, reply) => {
@@ -142,6 +157,14 @@ export function registerRoutes(
       member,
     })
 
+    // System message: agent joined
+    const sysMsg = messages.addSystem(channelId, `${agent.name} joined the channel`)
+    hubWs.broadcastToChannel(channelId, {
+      type: 'channel_message',
+      channelId,
+      message: sysMsg,
+    })
+
     // Return recent messages for context
     const recent = messages.getRecent(channelId, 20)
     return { member, recentMessages: recent }
@@ -160,6 +183,14 @@ export function registerRoutes(
       type: 'member_left',
       channelId,
       agentId: agent.id,
+    })
+
+    // System message: agent left
+    const sysMsg = messages.addSystem(channelId, `${agent.name} left the channel`)
+    hubWs.broadcastToChannel(channelId, {
+      type: 'channel_message',
+      channelId,
+      message: sysMsg,
     })
 
     return { ok: true }

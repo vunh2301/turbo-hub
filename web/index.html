@@ -31,11 +31,12 @@ const AGENT_COLORS = {
   'Codex': '#8b5cf6', 'Codex CLI': '#8b5cf6',
   'Antigravity': '#06b6d4',
   'Observer': '#3b82f6',
+  'System': '#4b5563',
   default: '#6b7280',
 };
 const AGENT_ICONS = {
   'Claude Code': '⚡', 'Codex': '🖥️', 'Codex CLI': '🖥️',
-  'Antigravity': '🔺', 'Observer': '👤', default: '🤖',
+  'Antigravity': '🔺', 'Observer': '👤', 'System': '→', default: '🤖',
 };
 
 function getColor(name) { return AGENT_COLORS[name] || AGENT_COLORS.default; }
@@ -61,13 +62,26 @@ function App() {
   useEffect(() => {
     async function init() {
       try {
-        // Register observer
-        const res = await fetch('/api/agents/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'Observer', type: 'human', capabilities: ['observe'] }),
-        });
-        const data = await res.json();
+        // Reuse existing session or register new Observer
+        let data;
+        const saved = localStorage.getItem('turbo-hub-observer');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          // Verify the token is still valid by heartbeat
+          const hb = await fetch(`/api/agents/${parsed.agentId}/heartbeat`, { method: 'POST' });
+          if (hb.ok) {
+            data = parsed;
+          }
+        }
+        if (!data) {
+          const res = await fetch('/api/agents/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'Observer', type: 'human', capabilities: ['observe'] }),
+          });
+          data = await res.json();
+          localStorage.setItem('turbo-hub-observer', JSON.stringify(data));
+        }
         setObserverToken(data.token);
 
         // Connect WS
@@ -174,6 +188,23 @@ function App() {
     });
   }
 
+  async function deleteAgent(agentId) {
+    if (!confirm('Remove this agent?')) return;
+    await fetch(`/api/agents/${agentId}`, { method: 'DELETE' });
+    refreshAgents();
+    refreshChannels();
+  }
+
+  async function archiveChannel(chId) {
+    if (!observerToken || !confirm('Archive this channel?')) return;
+    await fetch(`/api/channels/${chId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${observerToken}` },
+    });
+    if (activeChannel === chId) setActiveChannel(null);
+    refreshChannels();
+  }
+
   const activeChData = channels.find(c => c.id === activeChannel);
 
   return (
@@ -229,10 +260,20 @@ function App() {
               Agents ({agents.filter(a => a.status === 'online').length} online)
             </div>
             {agents.map(a => (
-              <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+              <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', position: 'relative' }}
+                className="agent-row">
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: a.status === 'online' ? '#10b981' : '#6b7280' }}></span>
                 <span style={{ fontSize: 14 }}>{getIcon(a.name)}</span>
-                <span style={{ fontSize: 12, color: getColor(a.name), fontWeight: 500 }}>{a.name}</span>
+                <span style={{ fontSize: 12, color: getColor(a.name), fontWeight: 500, flex: 1 }}>{a.name}</span>
+                <button onClick={(e) => { e.stopPropagation(); deleteAgent(a.id); }}
+                  title="Remove agent"
+                  style={{
+                    background: 'none', border: 'none', color: 'rgba(255,255,255,0.2)', cursor: 'pointer',
+                    fontSize: 11, padding: '2px 4px', borderRadius: 4,
+                  }}
+                  onMouseOver={e => e.target.style.color = '#ef4444'}
+                  onMouseOut={e => e.target.style.color = 'rgba(255,255,255,0.2)'}
+                >✕</button>
               </div>
             ))}
           </div>
@@ -253,6 +294,11 @@ function App() {
                   <span style={{ fontWeight: 600, fontSize: 15 }}>#{activeChData?.name || activeChannel}</span>
                   <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', marginLeft: 10 }}>{activeChData?.memberCount || 0} members</span>
                 </div>
+                <button onClick={() => archiveChannel(activeChannel)}
+                  title="Archive channel"
+                  style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '4px 12px', fontSize: 11, color: '#fca5a5', cursor: 'pointer' }}>
+                  Archive
+                </button>
               </div>
 
               {/* Messages */}
@@ -263,23 +309,31 @@ function App() {
                   </div>
                 )}
                 {messages.map((m, i) => (
-                  <div key={m.id || i} className="msg-enter" style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
-                    <div style={{
-                      width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      background: `${getColor(m.agentName)}20`, fontSize: 16, flexShrink: 0,
-                    }}>
-                      {getIcon(m.agentName)}
+                  m.agentType === 'system' ? (
+                    <div key={m.id || i} className="msg-enter" style={{ textAlign: 'center', margin: '8px 0', padding: '4px 0' }}>
+                      <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', background: 'rgba(255,255,255,0.03)', padding: '3px 12px', borderRadius: 10 }}>
+                        {m.content} — <span className="mono">{timeStr(m.timestamp)}</span>
+                      </span>
                     </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                        <span style={{ fontWeight: 600, fontSize: 13, color: getColor(m.agentName) }}>{m.agentName}</span>
-                        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)' }} className="mono">{timeStr(m.timestamp)}</span>
+                  ) : (
+                    <div key={m.id || i} className="msg-enter" style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                      <div style={{
+                        width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: `${getColor(m.agentName)}20`, fontSize: 16, flexShrink: 0,
+                      }}>
+                        {getIcon(m.agentName)}
                       </div>
-                      <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)', lineHeight: 1.5, marginTop: 2, wordBreak: 'break-word' }}>
-                        {m.content}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                          <span style={{ fontWeight: 600, fontSize: 13, color: getColor(m.agentName) }}>{m.agentName}</span>
+                          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)' }} className="mono">{timeStr(m.timestamp)}</span>
+                        </div>
+                        <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)', lineHeight: 1.5, marginTop: 2, wordBreak: 'break-word' }}>
+                          {m.content}
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )
                 ))}
                 <div ref={bottomRef} />
               </div>

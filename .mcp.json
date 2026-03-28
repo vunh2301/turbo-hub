@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "turbo-hub": {
+      "command": "npx",
+      "args": ["tsx", "mcp/index.ts"],
+      "cwd": "c:/Users/Codex/repo/turbo-hub",
+      "env": {
+        "HUB_URL": "http://127.0.0.1:2400"
+      }
+    }
+  }
+}

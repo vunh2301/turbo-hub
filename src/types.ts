@@ -54,7 +54,7 @@ export interface HubMessage {
   channelId: string
   agentId: string
   agentName: string
-  agentType: 'human' | 'ai'
+  agentType: 'human' | 'ai' | 'system'
   content: string
   mentions: string[]
   replyTo?: string

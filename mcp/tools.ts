@@ -1,4 +1,5 @@
 import { HubClient } from './client.js'
+import { HubWsClient } from './ws-client.js'
 
 export function getToolDefinitions() {
   return [
@@ -92,22 +93,36 @@ export function getToolDefinitions() {
         required: ['channel_id'],
       },
     },
+    {
+      name: 'hub_archive_channel',
+      description: 'Archive (delete) a channel. The channel will no longer appear in the channel list.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          channel_id: { type: 'string', description: 'Channel ID to archive' },
+        },
+        required: ['channel_id'],
+      },
+    },
   ]
 }
 
 export async function executeTool(
   client: HubClient,
+  ws: HubWsClient,
   toolName: string,
   args: Record<string, any>
 ): Promise<string> {
   switch (toolName) {
     case 'hub_register': {
       const result = await client.register(args.name, 'ai', args.capabilities ?? [])
+      // Connect WebSocket immediately after registration for realtime messages
+      ws.connect(result.token)
       return JSON.stringify(
         {
           success: true,
           agentId: result.agentId,
-          message: `Registered as "${args.name}" (${result.agentId}). You can now list/join channels.`,
+          message: `Registered as "${args.name}" (${result.agentId}). WebSocket connected for realtime messages. You can now list/join channels.`,
         },
         null,
         2
@@ -137,14 +152,17 @@ export async function executeTool(
     }
 
     case 'hub_join': {
+      // Subscribe WS first so we don't miss any messages during the HTTP join
+      ws.subscribe(args.channel_id)
       const result = await client.joinChannel(args.channel_id)
       const msgSummary =
         result.recentMessages.length > 0
           ? result.recentMessages
+              .filter((m: any) => m.agentType !== 'system')
               .map((m: any) => `[${m.agentName}]: ${m.content}`)
               .join('\n')
           : '(no messages yet)'
-      return `Joined channel ${args.channel_id}.\n\nRecent messages:\n${msgSummary}`
+      return `Joined channel ${args.channel_id}. Now receiving realtime messages via WebSocket.\n\nRecent messages:\n${msgSummary}`
     }
 
     case 'hub_send': {
@@ -153,18 +171,42 @@ export async function executeTool(
     }
 
     case 'hub_read': {
-      const result = await client.readMessages(args.channel_id, args.since, args.limit)
-      if (result.messages.length === 0) {
-        return 'No new messages.'
+      // Drain the realtime WS buffer first
+      const buffered = ws.flush(args.channel_id)
+      const wsConnected = ws.isConnected()
+
+      if (buffered.length > 0) {
+        const formatted = buffered
+          .filter((m: any) => m.agentType !== 'system')
+          .map((m: any) => `[${m.agentName} @ ${new Date(m.timestamp).toLocaleTimeString()}]: ${m.content}`)
+          .join('\n')
+        const userMsgs = buffered.filter((m: any) => m.agentType !== 'system')
+        if (userMsgs.length === 0) return 'No new messages.'
+        return formatted
       }
-      return result.messages
-        .map((m: any) => `[${m.agentName} @ ${new Date(m.timestamp).toLocaleTimeString()}]: ${m.content}`)
-        .join('\n')
+
+      // WS not connected yet — fall back to HTTP
+      if (!wsConnected) {
+        const result = await client.readMessages(args.channel_id, args.since, args.limit ?? 20)
+        if (result.messages.length === 0) return 'No new messages.'
+        return result.messages
+          .filter((m: any) => m.agentType !== 'system')
+          .map((m: any) => `[${m.agentName} @ ${new Date(m.timestamp).toLocaleTimeString()}]: ${m.content}`)
+          .join('\n')
+      }
+
+      return 'No new messages.'
     }
 
     case 'hub_leave': {
+      ws.unsubscribe(args.channel_id)
       await client.leaveChannel(args.channel_id)
       return `Left channel ${args.channel_id}`
+    }
+
+    case 'hub_archive_channel': {
+      await client.archiveChannel(args.channel_id)
+      return `Channel ${args.channel_id} archived (deleted).`
     }
 
     default:

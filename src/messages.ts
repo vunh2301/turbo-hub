@@ -59,6 +59,36 @@ export class MessageStore {
     return msgs.slice(-count)
   }
 
+  addSystem(channelId: string, content: string): HubMessage {
+    if (!this.messages.has(channelId)) {
+      this.messages.set(channelId, [])
+      this.seqCounters.set(channelId, 0)
+    }
+
+    const seq = (this.seqCounters.get(channelId) ?? 0) + 1
+    this.seqCounters.set(channelId, seq)
+
+    const message: HubMessage = {
+      id: `msg_${Date.now().toString(36)}`,
+      channelId,
+      agentId: 'system',
+      agentName: 'System',
+      agentType: 'system',
+      content,
+      mentions: [],
+      timestamp: Date.now(),
+      seq,
+    }
+
+    const msgs = this.messages.get(channelId)!
+    msgs.push(message)
+    if (msgs.length > this.config.maxMessagesPerChannel) {
+      msgs.splice(0, msgs.length - this.config.maxMessagesPerChannel)
+    }
+
+    return message
+  }
+
   private parseMentions(text: string): string[] {
     const regex = /@([a-zA-Z0-9_-]+)/g
     const mentions: string[] = []
