@@ -148,20 +148,20 @@ async function handleMessage(
 // ─── WS connection ───────────────────────────────────────────────────────────
 
 let _ws: WebSocket | null = null
-let _subscribedChannels: Set<string> | null = null
+// Initialize eagerly so subscribeChannel() can be called before startSubscriber() completes
+const _subscribedChannels = new Set<string>()
 
-// Called by MCP tools (hub_join) to make subscriber watch a channel immediately
+// Called by MCP tools (hub_join) — safe to call before subscriber is ready
 export function subscribeChannel(channelId: string): void {
-  if (!_subscribedChannels) return
   _subscribedChannels.add(channelId)
   if (_ws?.readyState === WebSocket.OPEN) {
     _ws.send(JSON.stringify({ type: 'subscribe_channel', channelId }))
     console.error(`[subscriber] subscribed to channel ${channelId}`)
   }
+  // If WS not yet connected, channel will be subscribed in the 'open' handler
 }
 
 export function unsubscribeChannel(channelId: string): void {
-  if (!_subscribedChannels) return
   _subscribedChannels.delete(channelId)
   if (_ws?.readyState === WebSocket.OPEN) {
     _ws.send(JSON.stringify({ type: 'unsubscribe_channel', channelId }))
@@ -171,11 +171,9 @@ export function unsubscribeChannel(channelId: string): void {
 function startWS(
   wsUrl: string,
   token: string,
-  subscribedChannels: Set<string>,
   config: SubscriberConfig,
   client: HubClient,
 ): void {
-  _subscribedChannels = subscribedChannels
   let retryMs = 1_000
 
   function connect() {
@@ -185,10 +183,10 @@ function startWS(
     ws.on('open', () => {
       retryMs = 1_000
       ws.send(JSON.stringify({ type: 'auth', token }))
-      for (const ch of subscribedChannels) {
+      for (const ch of _subscribedChannels) {
         ws.send(JSON.stringify({ type: 'subscribe_channel', channelId: ch }))
       }
-      console.error(`[subscriber] WS connected, watching ${subscribedChannels.size} channel(s)`)
+      console.error(`[subscriber] WS connected, watching ${_subscribedChannels.size} channel(s)`)
     })
 
     ws.on('message', (data: Buffer) => {
@@ -250,22 +248,20 @@ export async function startSubscriber(): Promise<void> {
   const { token } = await client.register(config.agentName, 'ai', ['auto_respond'])
   console.error(`[subscriber] registered as "${config.agentName}" (${client.agentId})`)
 
-  const subscribedChannels = new Set<string>()
-
-  // Auto-join channel if configured
+  // Auto-join channel if configured (adds to the shared _subscribedChannels set)
   if (config.autoJoinChannel) {
     try {
       await client.joinChannel(config.autoJoinChannel)
-      subscribedChannels.add(config.autoJoinChannel)
+      _subscribedChannels.add(config.autoJoinChannel)
       console.error(`[subscriber] auto-joined channel ${config.autoJoinChannel}`)
     } catch (err: any) {
       console.error(`[subscriber] auto-join failed: ${err.message}`)
     }
   }
 
-  // Start WS daemon
+  // Start WS daemon — uses shared _subscribedChannels (may already have channels from hub_join calls)
   const wsUrl = config.hubUrl.replace(/^http/, 'ws') + '/ws'
-  startWS(wsUrl, token, subscribedChannels, config, client)
+  startWS(wsUrl, token, config, client)
 
   // Heartbeat every 25s
   setInterval(async () => {
